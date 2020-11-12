@@ -259,6 +259,8 @@ class QRNN:
               learning_rate_minimum=1e-6,
               maximum_epochs=200,
               training_split=0.9,
+              optimizer=None,
+              learning_rate_scheduler=None,
               gpu = False):
         """
         Train model on given training data.
@@ -312,7 +314,9 @@ class QRNN:
                                 learning_rate_minimum,
                                 maximum_epochs,
                                 training_split,
-                                gpu)
+                                gpu,
+                                optimizer=optimizer,
+                                learning_rate_scheduler=learning_rate_scheduler)
 
     def predict(self, x):
         r"""

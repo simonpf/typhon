@@ -139,7 +139,7 @@ class QuantileLoss:
     computed by taking the mean over all samples in the batch.
     """
 
-    def __init__(self, quantiles, mask=-1.0):
+    def __init__(self, quantiles, mask=None):
         """
         Create an instance of the quantile loss function with the given quantiles.
 
@@ -148,7 +148,9 @@ class QuantileLoss:
         """
         self.quantiles = torch.tensor(quantiles).float()
         self.n_quantiles = len(quantiles)
-        self.mask = np.float32(mask)
+        self.mask = mask
+        if self.mask:
+            self.mask = np.float32(mask)
 
     def to(self, device):
         self.quantiles = self.quantiles.to(device)
@@ -170,7 +172,7 @@ class QuantileLoss:
         n = self.quantiles.size()[0]
         qs = self.quantiles.reshape((n,) + (1,) * max(len(dy.size()) - 2, 0))
         l = torch.where(dy >= 0.0, (1.0 - qs) * dy, (-qs) * dy)
-        if not self.mask is None:
+        if self.mask:
             l = torch.where(y_true == self.mask, torch.zeros_like(l), l)
         return l.mean()
 
@@ -202,9 +204,9 @@ class PytorchModel:
         self.backend = "typhon.retrieval.qrnn.models.pytorch"
 
     def _make_adversarial_samples(self, x, y, eps):
-        self.model.zero_grad()
+        self.zero_grad()
         x.requires_grad = True
-        y_pred = self.model(x)
+        y_pred = self(x)
         c = self.criterion(y_pred, y)
         c.backward()
         x_adv = x.detach() + eps * torch.sign(x.grad.detach())
@@ -262,6 +264,8 @@ class PytorchModel:
             "maximum_epochs": 1,
             "training_split": 0.9,
             "gpu": False,
+            "optimizer": None,
+            "learning_rate_scheduler": None
         }
         argument_names = arguments.keys()
         for a, n in zip(args[1:], argument_names):
@@ -285,6 +289,8 @@ class PytorchModel:
         training_split = arguments["training_split"]
         gpu = arguments["gpu"]
         momentum = arguments["momentum"]
+        optimizer = arguments["optimizer"]
+        learning_rate_scheduler = arguments["learning_rate_scheduler"]
 
         #
         # Determine device to use
@@ -305,16 +311,24 @@ class PytorchModel:
             pass
 
         self.train()
-        self.optimizer = optim.SGD(
-            self.parameters(), lr=initial_learning_rate, momentum=momentum
-        )
+        if not optimizer:
+            self.optimizer = optim.SGD(
+                self.parameters(), lr=initial_learning_rate, momentum=momentum
+            )
+        else:
+            self.optimizer = optimizer
         self.criterion.to(device)
-        scheduler = ReduceLROnPlateau(
-            self.optimizer,
-            factor=1.0 / learning_rate_decay,
-            patience=convergence_epochs,
-            min_lr=learning_rate_minimum,
-        )
+
+        if not optimizer and not learning_rate_scheduler:
+            scheduler = ReduceLROnPlateau(
+                self.optimizer,
+                factor=1.0 / learning_rate_decay,
+                patience=convergence_epochs,
+                min_lr=learning_rate_minimum,
+            )
+        else:
+            scheduler = learning_rate_scheduler
+
         training_errors = []
         validation_errors = []
 
@@ -391,9 +405,10 @@ class PytorchModel:
                         lr,
                     )
                 )
-                scheduler.step(val_err / n)
+                if scheduler:
+                    scheduler.step()
             else:
-                scheduler.step(err / n)
+                scheduler.step()
                 print(
                     "Epoch {} / {}: Training error: {:.3f}, Learning rate: {:.5f}".format(
                         i, maximum_epochs, training_errors[-1], lr
